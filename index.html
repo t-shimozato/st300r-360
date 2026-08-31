@@ -22,15 +22,20 @@
     position:relative;
     width:min(92vw, calc(92vh * 16 / 9));
     aspect-ratio:16/9;
-    cursor:grab; touch-action:pan-y;
+    cursor:grab; touch-action:none; overflow:hidden;
   }
   #stage.dragging{cursor:grabbing;}
-  #stage img{
+  #zoomWrap{
+    position:absolute; inset:0;
+    transform-origin:0 0; will-change:transform;
+    pointer-events:none;
+  }
+  #zoomWrap img{
     position:absolute; inset:0; width:100%; height:100%;
     object-fit:contain; pointer-events:none;
     opacity:0;
   }
-  #stage img.visible{opacity:1;}
+  #zoomWrap img.visible{opacity:1;}
   /* 読み込み表示 */
   #loader{
     position:absolute; inset:0; display:flex; flex-direction:column;
@@ -58,18 +63,29 @@
     cursor:pointer; letter-spacing:.05em;
   }
   #playBtn:hover{background:rgba(255,255,255,.9);}
+  .zoomBtn{
+    border:1px solid rgba(0,0,0,.2); background:rgba(255,255,255,.6);
+    color:var(--fg); font-size:14px; width:32px; height:32px;
+    border-radius:50%; cursor:pointer; line-height:1;
+  }
+  .zoomBtn:hover{background:rgba(255,255,255,.9);}
+  #resetBtn{width:auto; border-radius:20px; padding:0 14px; font-size:12px;}
 </style>
 </head>
 <body>
   <div id="stage">
+    <div id="zoomWrap"></div>
     <div id="loader">
       <div class="bar"><i id="barFill"></i></div>
       <span id="loadText">読み込み中… 0%</span>
     </div>
   </div>
   <div id="ui">
-    <span id="hint">← ドラッグ / スワイプで回転 →</span>
+    <span id="hint">← ドラッグで回転 / ホイール・ピンチで拡大縮小 →</span>
     <button id="playBtn" type="button">▶ 自動回転を開始</button>
+    <button class="zoomBtn" id="zoomOutBtn" type="button" aria-label="縮小">−</button>
+    <button class="zoomBtn" id="zoomInBtn" type="button" aria-label="拡大">＋</button>
+    <button class="zoomBtn" id="resetBtn" type="button">等倍に戻す</button>
   </div>
 
 <script>
@@ -80,7 +96,10 @@
   var AUTO_INTERVAL = 90;       // 自動回転の1フレームあたりms
   var RESUME_DELAY = 2500;      // 操作後に自動回転を再開するまでのms
 
+  var MIN_ZOOM = 1, MAX_ZOOM = 4;
+
   var stage = document.getElementById('stage');
+  var zoomWrap = document.getElementById('zoomWrap');
   var loader = document.getElementById('loader');
   var barFill = document.getElementById('barFill');
   var loadText = document.getElementById('loadText');
@@ -106,7 +125,7 @@
         if (loaded === FRAME_COUNT) start();
       };
       img.src = PATH(i);
-      stage.appendChild(img);
+      zoomWrap.appendChild(img);
       frames[i] = img;
     })(i);
   }
@@ -151,6 +170,50 @@
     }
   });
 
+  // ---- ズーム(ホイール / ピンチ / ボタン) ----
+  var zoom = 1, tx = 0, ty = 0;
+
+  function applyZoom(){
+    // 画像がステージの外へ出過ぎないように移動量を制限
+    var r = stage.getBoundingClientRect();
+    var minX = r.width  - r.width  * zoom;
+    var minY = r.height - r.height * zoom;
+    tx = Math.min(0, Math.max(minX, tx));
+    ty = Math.min(0, Math.max(minY, ty));
+    zoomWrap.style.transform = 'translate(' + tx + 'px,' + ty + 'px) scale(' + zoom + ')';
+  }
+  function zoomAt(px, py, newZoom){
+    // ステージ内の点(px,py)を中心に拡大縮小
+    newZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, newZoom));
+    var cx = (px - tx) / zoom;
+    var cy = (py - ty) / zoom;
+    zoom = newZoom;
+    tx = px - cx * zoom;
+    ty = py - cy * zoom;
+    applyZoom();
+  }
+  function resetZoom(){
+    zoom = 1; tx = 0; ty = 0; applyZoom();
+  }
+
+  stage.addEventListener('wheel', function(e){
+    e.preventDefault();
+    var r = stage.getBoundingClientRect();
+    var factor = e.deltaY < 0 ? 1.15 : 1/1.15;
+    zoomAt(e.clientX - r.left, e.clientY - r.top, zoom * factor);
+  }, {passive:false});
+
+  document.getElementById('zoomInBtn').addEventListener('click', function(){
+    var r = stage.getBoundingClientRect();
+    zoomAt(r.width/2, r.height/2, zoom * 1.3);
+  });
+  document.getElementById('zoomOutBtn').addEventListener('click', function(){
+    var r = stage.getBoundingClientRect();
+    zoomAt(r.width/2, r.height/2, zoom / 1.3);
+  });
+  document.getElementById('resetBtn').addEventListener('click', resetZoom);
+  stage.addEventListener('dblclick', resetZoom);
+
   // ---- ドラッグ / スワイプ ----
   var dragging = false;
   var startX = 0;
@@ -180,10 +243,55 @@
   window.addEventListener('mousemove', function(e){ pointerMove(e.clientX); });
   window.addEventListener('mouseup', pointerUp);
 
-  stage.addEventListener('touchstart', function(e){ pointerDown(e.touches[0].clientX); }, {passive:true});
-  stage.addEventListener('touchmove', function(e){ pointerMove(e.touches[0].clientX); }, {passive:true});
-  stage.addEventListener('touchend', pointerUp);
-  stage.addEventListener('touchcancel', pointerUp);
+  // タッチ: 1本指=回転 / 2本指=ピンチで拡大縮小・移動
+  var pinch = null;
+
+  function touchInfo(e){
+    var r = stage.getBoundingClientRect();
+    var t0 = e.touches[0], t1 = e.touches[1];
+    return {
+      dist: Math.hypot(t1.clientX - t0.clientX, t1.clientY - t0.clientY),
+      midX: (t0.clientX + t1.clientX) / 2 - r.left,
+      midY: (t0.clientY + t1.clientY) / 2 - r.top
+    };
+  }
+
+  stage.addEventListener('touchstart', function(e){
+    if (e.touches.length === 2) {
+      dragging = false;
+      stage.classList.remove('dragging');
+      var info = touchInfo(e);
+      pinch = { dist: info.dist, midX: info.midX, midY: info.midY, zoom: zoom };
+      stopAuto();
+    } else if (e.touches.length === 1 && !pinch) {
+      pointerDown(e.touches[0].clientX);
+    }
+  }, {passive:true});
+
+  stage.addEventListener('touchmove', function(e){
+    if (pinch && e.touches.length === 2) {
+      e.preventDefault();
+      var info = touchInfo(e);
+      // 中点の移動で平行移動
+      tx += info.midX - pinch.midX;
+      ty += info.midY - pinch.midY;
+      // 指の距離の変化で拡大縮小
+      zoomAt(info.midX, info.midY, pinch.zoom * (info.dist / pinch.dist));
+      pinch.midX = info.midX; pinch.midY = info.midY;
+    } else if (!pinch && e.touches.length === 1) {
+      pointerMove(e.touches[0].clientX);
+    }
+  }, {passive:false});
+
+  function touchEnd(e){
+    if (pinch && e.touches.length < 2) {
+      pinch = null;
+      scheduleResume();
+    }
+    if (e.touches.length === 0) pointerUp();
+  }
+  stage.addEventListener('touchend', touchEnd);
+  stage.addEventListener('touchcancel', touchEnd);
 
   // キーボード操作(矢印キー)
   window.addEventListener('keydown', function(e){
