@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ST300R 360° ビューア</title>
+<style>
+  :root{
+    --bg1:#f4f5f7; --bg2:#dfe3e8; --fg:#333; --sub:#888;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  html,body{height:100%;}
+  body{
+    font-family:"Hiragino Kaku Gothic ProN","Yu Gothic",Meiryo,sans-serif;
+    background:radial-gradient(ellipse at 50% 40%, var(--bg1) 0%, var(--bg2) 100%);
+    color:var(--fg);
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+    height:100%; overflow:hidden;
+    -webkit-user-select:none; user-select:none;
+  }
+  #stage{
+    position:relative;
+    width:min(92vw, calc(92vh * 16 / 9));
+    aspect-ratio:16/9;
+    cursor:grab; touch-action:pan-y;
+  }
+  #stage.dragging{cursor:grabbing;}
+  #stage img{
+    position:absolute; inset:0; width:100%; height:100%;
+    object-fit:contain; pointer-events:none;
+    opacity:0;
+  }
+  #stage img.visible{opacity:1;}
+  /* 読み込み表示 */
+  #loader{
+    position:absolute; inset:0; display:flex; flex-direction:column;
+    align-items:center; justify-content:center; gap:14px;
+  }
+  #loader .bar{
+    width:min(60%, 320px); height:4px; border-radius:2px;
+    background:rgba(0,0,0,.12); overflow:hidden;
+  }
+  #loader .bar i{
+    display:block; height:100%; width:0%;
+    background:#555; border-radius:2px; transition:width .15s;
+  }
+  #loader span{font-size:13px; color:var(--sub); letter-spacing:.05em;}
+  /* 操作ヒント・コントロール */
+  #ui{
+    display:flex; align-items:center; gap:16px; margin-top:10px;
+    opacity:0; transition:opacity .5s;
+  }
+  #ui.show{opacity:1;}
+  #hint{font-size:13px; color:var(--sub); letter-spacing:.05em;}
+  #playBtn{
+    border:1px solid rgba(0,0,0,.2); background:rgba(255,255,255,.6);
+    color:var(--fg); font-size:13px; padding:6px 14px; border-radius:20px;
+    cursor:pointer; letter-spacing:.05em;
+  }
+  #playBtn:hover{background:rgba(255,255,255,.9);}
+</style>
+</head>
+<body>
+  <div id="stage">
+    <div id="loader">
+      <div class="bar"><i id="barFill"></i></div>
+      <span id="loadText">読み込み中… 0%</span>
+    </div>
+  </div>
+  <div id="ui">
+    <span id="hint">← ドラッグ / スワイプで回転 →</span>
+    <button id="playBtn" type="button">⏸ 自動回転を停止</button>
+  </div>
+
+<script>
+(function(){
+  var FRAME_COUNT = 36;
+  var PATH = function(i){ return 'images/frame_' + String(i).padStart(2,'0') + '.webp'; };
+  var DRAG_PER_FRAME = 12;      // 1フレーム進むのに必要なドラッグ量(px)
+  var AUTO_INTERVAL = 90;       // 自動回転の1フレームあたりms
+  var RESUME_DELAY = 2500;      // 操作後に自動回転を再開するまでのms
+
+  var stage = document.getElementById('stage');
+  var loader = document.getElementById('loader');
+  var barFill = document.getElementById('barFill');
+  var loadText = document.getElementById('loadText');
+  var ui = document.getElementById('ui');
+  var playBtn = document.getElementById('playBtn');
+
+  var frames = [];
+  var current = 0;
+  var loaded = 0;
+  var autoOn = true;        // ユーザー設定としての自動回転ON/OFF
+  var autoTimer = null;
+  var resumeTimer = null;
+
+  // ---- プリロード ----
+  for (var i = 0; i < FRAME_COUNT; i++) {
+    (function(i){
+      var img = new Image();
+      img.onload = img.onerror = function(){
+        loaded++;
+        var pct = Math.round(loaded / FRAME_COUNT * 100);
+        barFill.style.width = pct + '%';
+        loadText.textContent = '読み込み中… ' + pct + '%';
+        if (loaded === FRAME_COUNT) start();
+      };
+      img.src = PATH(i);
+      stage.appendChild(img);
+      frames[i] = img;
+    })(i);
+  }
+
+  function show(idx){
+    idx = ((idx % FRAME_COUNT) + FRAME_COUNT) % FRAME_COUNT;
+    if (idx === current && frames[current].classList.contains('visible')) return;
+    frames[current].classList.remove('visible');
+    current = idx;
+    frames[current].classList.add('visible');
+  }
+
+  function start(){
+    loader.style.display = 'none';
+    ui.classList.add('show');
+    frames[0].classList.add('visible');
+    startAuto();
+  }
+
+  // ---- 自動回転 ----
+  function startAuto(){
+    if (!autoOn || autoTimer) return;
+    autoTimer = setInterval(function(){ show(current + 1); }, AUTO_INTERVAL);
+  }
+  function stopAuto(){
+    if (autoTimer) { clearInterval(autoTimer); autoTimer = null; }
+    if (resumeTimer) { clearTimeout(resumeTimer); resumeTimer = null; }
+  }
+  function scheduleResume(){
+    if (!autoOn) return;
+    if (resumeTimer) clearTimeout(resumeTimer);
+    resumeTimer = setTimeout(startAuto, RESUME_DELAY);
+  }
+
+  playBtn.addEventListener('click', function(){
+    autoOn = !autoOn;
+    if (autoOn) {
+      playBtn.textContent = '⏸ 自動回転を停止';
+      startAuto();
+    } else {
+      playBtn.textContent = '▶ 自動回転を再生';
+      stopAuto();
+    }
+  });
+
+  // ---- ドラッグ / スワイプ ----
+  var dragging = false;
+  var startX = 0;
+  var startFrame = 0;
+
+  function pointerDown(x){
+    dragging = true;
+    startX = x;
+    startFrame = current;
+    stage.classList.add('dragging');
+    stopAuto();
+  }
+  function pointerMove(x){
+    if (!dragging) return;
+    var delta = x - startX;
+    var frameOffset = Math.round(delta / DRAG_PER_FRAME);
+    show(startFrame + frameOffset);
+  }
+  function pointerUp(){
+    if (!dragging) return;
+    dragging = false;
+    stage.classList.remove('dragging');
+    scheduleResume();
+  }
+
+  stage.addEventListener('mousedown', function(e){ e.preventDefault(); pointerDown(e.clientX); });
+  window.addEventListener('mousemove', function(e){ pointerMove(e.clientX); });
+  window.addEventListener('mouseup', pointerUp);
+
+  stage.addEventListener('touchstart', function(e){ pointerDown(e.touches[0].clientX); }, {passive:true});
+  stage.addEventListener('touchmove', function(e){ pointerMove(e.touches[0].clientX); }, {passive:true});
+  stage.addEventListener('touchend', pointerUp);
+  stage.addEventListener('touchcancel', pointerUp);
+
+  // キーボード操作(矢印キー)
+  window.addEventListener('keydown', function(e){
+    if (e.key === 'ArrowLeft')  { stopAuto(); show(current - 1); scheduleResume(); }
+    if (e.key === 'ArrowRight') { stopAuto(); show(current + 1); scheduleResume(); }
+  });
+})();
+</script>
+</body>
+</html>
