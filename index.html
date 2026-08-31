@@ -69,7 +69,7 @@
     border-radius:50%; cursor:pointer; line-height:1;
   }
   .zoomBtn:hover{background:rgba(255,255,255,.9);}
-  #resetBtn{width:auto; border-radius:20px; padding:0 14px; font-size:12px;}
+  #resetBtn, #halfBtn{width:auto; border-radius:20px; padding:0 14px; font-size:12px; height:32px;}
 </style>
 </head>
 <body>
@@ -85,6 +85,7 @@
     <button id="playBtn" type="button">▶ 自動回転を開始</button>
     <button class="zoomBtn" id="zoomOutBtn" type="button" aria-label="縮小">−</button>
     <button class="zoomBtn" id="zoomInBtn" type="button" aria-label="拡大">＋</button>
+    <button class="zoomBtn" id="halfBtn" type="button">50%</button>
     <button class="zoomBtn" id="resetBtn" type="button">等倍に戻す</button>
   </div>
 
@@ -96,7 +97,7 @@
   var AUTO_INTERVAL = 90;       // 自動回転の1フレームあたりms
   var RESUME_DELAY = 2500;      // 操作後に自動回転を再開するまでのms
 
-  var MIN_ZOOM = 1, MAX_ZOOM = 4;
+  var MIN_ZOOM = 0.5, MAX_ZOOM = 4;
 
   var stage = document.getElementById('stage');
   var zoomWrap = document.getElementById('zoomWrap');
@@ -174,12 +175,18 @@
   var zoom = 1, tx = 0, ty = 0;
 
   function applyZoom(){
-    // 画像がステージの外へ出過ぎないように移動量を制限
     var r = stage.getBoundingClientRect();
-    var minX = r.width  - r.width  * zoom;
-    var minY = r.height - r.height * zoom;
-    tx = Math.min(0, Math.max(minX, tx));
-    ty = Math.min(0, Math.max(minY, ty));
+    if (zoom <= 1) {
+      // 縮小時は常に中央に配置
+      tx = (r.width  - r.width  * zoom) / 2;
+      ty = (r.height - r.height * zoom) / 2;
+    } else {
+      // 拡大時は画像がステージの外へ出過ぎないように移動量を制限
+      var minX = r.width  - r.width  * zoom;
+      var minY = r.height - r.height * zoom;
+      tx = Math.min(0, Math.max(minX, tx));
+      ty = Math.min(0, Math.max(minY, ty));
+    }
     zoomWrap.style.transform = 'translate(' + tx + 'px,' + ty + 'px) scale(' + zoom + ')';
   }
   function zoomAt(px, py, newZoom){
@@ -210,6 +217,9 @@
   document.getElementById('zoomOutBtn').addEventListener('click', function(){
     var r = stage.getBoundingClientRect();
     zoomAt(r.width/2, r.height/2, zoom / 1.3);
+  });
+  document.getElementById('halfBtn').addEventListener('click', function(){
+    zoom = 0.5; applyZoom();
   });
   document.getElementById('resetBtn').addEventListener('click', resetZoom);
   stage.addEventListener('dblclick', resetZoom);
