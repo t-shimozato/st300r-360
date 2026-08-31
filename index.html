@@ -69,7 +69,7 @@
   </div>
   <div id="ui">
     <span id="hint">← ドラッグ / スワイプで回転 →</span>
-    <button id="playBtn" type="button">⏸ 自動回転を停止</button>
+    <button id="playBtn" type="button">▶ 自動回転を開始</button>
   </div>
 
 <script>
@@ -90,7 +90,7 @@
   var frames = [];
   var current = 0;
   var loaded = 0;
-  var autoOn = true;        // ユーザー設定としての自動回転ON/OFF
+  var autoOn = false;       // ユーザー設定としての自動回転ON/OFF(初期状態は停止)
   var autoTimer = null;
   var resumeTimer = null;
 
@@ -123,7 +123,6 @@
     loader.style.display = 'none';
     ui.classList.add('show');
     frames[0].classList.add('visible');
-    startAuto();
   }
 
   // ---- 自動回転 ----
@@ -147,7 +146,7 @@
       playBtn.textContent = '⏸ 自動回転を停止';
       startAuto();
     } else {
-      playBtn.textContent = '▶ 自動回転を再生';
+      playBtn.textContent = '▶ 自動回転を開始';
       stopAuto();
     }
   });
